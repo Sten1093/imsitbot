@@ -3,21 +3,35 @@ package parser
 import (
 	"fmt"
 	"github.com/xuri/excelize/v2"
-	"log"
 	"strings"
+	"sync"
 	"time"
 )
 
 type Group struct {
-	ID        int    // Id группы
-	TGName    string // Название группы в Telegram (со смайликами)
-	FileName  string // Название группы в файле (без смайликов)
-	CourseNum string // Номер курса
+	ID        int
+	TGName    string
+	FileName  string
+	CourseNum string
 }
 
-// GetGroups - возвращает список всех групп
-func GetGroups() []Group {
-	return []Group{
+// Константы
+const (
+	HigherEd    = "Высшее"
+	SecondaryEd = "Среднее"
+	WeekFormat  = "📅 Неделя"
+	DayFormat   = "🌞 День 🙋‍♂️"
+)
+
+// Глобальный кэш групп
+var (
+	groups     []Group
+	groupsMap  map[string]*Group
+	groupsInit sync.Once
+)
+
+func initGroups() {
+	groups = []Group{
 		{1, "💻24-ИВТ-01", "24-ИВТ-01", "🤓 1 курс"},
 		{1, "👨‍💻24-ПИ-01", "24-ПИ-01", "🤓 1 курс"},
 		{1, "👩‍💻24-ПИ-02", "24-ПИ-02", "🤓 1 курс"},
@@ -267,178 +281,140 @@ func GetGroups() []Group {
 		{10, "💰21-СПО-ОТЗИ-01,02 22-СПО-ОТЗИ-04", "21-СПО-ОТЗИ-01,02 22-СПО-ОТЗИ-04", "🎓 4 курс"},
 		{10, "🥸21-СПО-СиСА-01,02", "21-СПО-СиСА-01,02", "🎓 4 курс"},
 	}
+	groupsMap = make(map[string]*Group, len(groups))
+	for i := range groups {
+		groupsMap[groups[i].TGName] = &groups[i]
+	}
 }
 
-// FindGroup - находит группу по Telegram-имени
+func GetGroups() []Group {
+	groupsInit.Do(initGroups)
+	return groups
+}
+
 func FindGroup(tgName string) *Group {
-	for _, group := range GetGroups() {
-		if group.TGName == tgName {
-			return &group
-		}
-	}
-	return nil
+	groupsInit.Do(initGroups)
+	return groupsMap[tgName]
 }
 
-func GenerateResponseFromTable(fieldPosStart int, fieldPosEnd int, groupName int, rows [][]string) (resault []string) {
-
+func GenerateResponseFromTable(fieldPosStart, fieldPosEnd, groupName int, rows [][]string) []string {
+	var result []string
 	for i := fieldPosEnd; i <= fieldPosStart && i < len(rows); i++ {
-		row := rows[i]
-		if len(row) > groupName && row[groupName] != "" {
-			entry := fmt.Sprintf("%s: %s", row[1], row[groupName])
-			if strings.TrimSpace(entry) != "" {
-				resault = append(resault, entry)
-			}
+		if len(rows[i]) <= groupName || rows[i][groupName] == "" {
+			continue
+		}
+		entry := fmt.Sprintf("%s: %s", rows[i][1], rows[i][groupName])
+		if trimmed := strings.TrimSpace(entry); trimmed != "" {
+			result = append(result, trimmed)
 		}
 	}
-	if resault == nil {
-		return append(resault, "Выходной")
-	} else {
-		return
+	if len(result) == 0 {
+		return []string{"Выходной"}
 	}
+	return result
 }
 
 func Tab(TGName, format, education string) string {
-	var (
-		dayRus, fileName, result              string
-		groupName, fieldPosEnd, fieldPosStart int
-	)
-
 	group := FindGroup(TGName)
 	if group == nil {
 		return fmt.Sprintf("Группа %s не найдена", TGName)
 	}
 
-	_, _, week, _ := NowTime()
-	switch education {
-	case "Высшее":
-		switch group.CourseNum { // проверка курса перед окрыием файла
-		case "🤓 1 курс":
-			fileName = "resources/1_course.xlsx"
-		case "😎 2 курс":
-			fileName = "resources/2_course.xlsx"
-		case "🧐 3 курс":
-			fileName = "resources/3_course.xlsx"
-		case "🎓 4 курс":
-			fileName = "resources/4_course.xlsx"
-		case "🫠 5 курс":
-			fileName = "resources/5_course.xlsx"
-
-		}
-	case "Среднее":
-		switch group.CourseNum { // проверка курса перед окрыием файла
-		case "🤓 1 курс":
-			fileName = "resources/СПО_1_course.xlsx"
-		case "😎 2 курс":
-			fileName = "resources/СПО_2_course.xlsx"
-		case "🧐 3 курс":
-			fileName = "resources/СПО_3_course.xlsx"
-		case "🎓 4 курс":
-			fileName = "resources/СПО_4_course.xlsx"
-		}
+	fileName := getFileName(education, group.CourseNum)
+	if fileName == "" {
+		return "Неподдерживаемый тип образования или курс"
 	}
 
-	f, err := excelize.OpenFile(fileName) // открыттие файла
+	f, err := excelize.OpenFile(fileName)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Sprintf("Ошибка открытия файла: %v", err)
 	}
 	defer f.Close()
 
-	rows, err := f.GetRows(week) // перенос файла в переменную
+	_, _, week, _ := NowTime()
+	rows, err := f.GetRows(week)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Sprintf("Ошибка чтения данных: %v", err)
 	}
 
-	// Поиск столбца группы
-	found := false
-	for j, cell := range rows[0] { // Поиск столбца группы
-		if cell == group.FileName {
-			groupName = j
-			found = true
+	groupName := findGroupColumn(rows[0], group.FileName)
+	if groupName == -1 {
+		return fmt.Sprintf("Группа %s не найдена в файле", group)
+	}
+
+	return generateSchedule(format, groupName, rows)
+}
+
+func getFileName(education, courseNum string) string {
+	courseFiles := map[string]map[string]string{
+		HigherEd: {
+			"🤓 1 курс": "resources/1_course.xlsx",
+			"😎 2 курс": "resources/2_course.xlsx",
+			"🧐 3 курс": "resources/3_course.xlsx",
+			"🎓 4 курс": "resources/4_course.xlsx",
+			"🫠 5 курс": "resources/5_course.xlsx",
+		},
+		SecondaryEd: {
+			"🤓 1 курс": "resources/СПО_1_course.xlsx",
+			"😎 2 курс": "resources/СПО_2_course.xlsx",
+			"🧐 3 курс": "resources/СПО_3_course.xlsx",
+			"🎓 4 курс": "resources/СПО_4_course.xlsx",
+		},
+	}
+	return courseFiles[education][courseNum]
+}
+
+func findGroupColumn(header []string, groupName string) int {
+	for i, cell := range header {
+		if cell == groupName {
+			return i
 		}
 	}
+	return -1
+}
 
-	if !found { // Группа не найдена
-		return fmt.Sprintf("Группа %s не найдена", group)
+func generateSchedule(format string, groupName int, rows [][]string) string {
+	dayRanges := map[time.Weekday][2]int{
+		time.Monday:    {1, 14},
+		time.Tuesday:   {15, 28},
+		time.Wednesday: {29, 42},
+		time.Thursday:  {43, 56},
+		time.Friday:    {57, 70},
+		time.Saturday:  {71, 84},
+	}
+	dayNames := map[time.Weekday]string{
+		time.Monday:    "Понедельник",
+		time.Tuesday:   "Вторник",
+		time.Wednesday: "Среда",
+		time.Thursday:  "Четверг",
+		time.Friday:    "Пятница",
+		time.Saturday:  "Суббота",
 	}
 
-	if format == "📅 Неделя" {
-		day := time.Monday
-		switch day {
-		case time.Monday:
-			dayRus = "\nПонедельник\n"
-			fieldPosEnd = 1
-			fieldPosStart = 14
-			result = dayRus + strings.Join(GenerateResponseFromTable(fieldPosStart, fieldPosEnd, groupName, rows), "\n") + "\n----------\n"
-			fallthrough
-		case time.Tuesday:
-			dayRus = "\nВторник\n"
-			fieldPosEnd = 15
-			fieldPosStart = 28
-			result = result + dayRus + strings.Join(GenerateResponseFromTable(fieldPosStart, fieldPosEnd, groupName, rows), "\n") + "\n----------\n"
-			fallthrough
-		case time.Wednesday:
-			dayRus = "\nСреда\n"
-			fieldPosEnd = 29
-			fieldPosStart = 42
-			result = result + dayRus + strings.Join(GenerateResponseFromTable(fieldPosStart, fieldPosEnd, groupName, rows), "\n") + "\n----------\n"
-			fallthrough
-		case time.Thursday:
-			dayRus = "\nЧетверг\n"
-			fieldPosEnd = 43
-			fieldPosStart = 56
-			result = result + dayRus + strings.Join(GenerateResponseFromTable(fieldPosStart, fieldPosEnd, groupName, rows), "\n") + "\n----------\n"
-			fallthrough
-		case time.Friday:
-			dayRus = "\nПятница\n"
-			fieldPosEnd = 57
-			fieldPosStart = 70
-			result = result + dayRus + strings.Join(GenerateResponseFromTable(fieldPosStart, fieldPosEnd, groupName, rows), "\n") + "\n----------\n"
-			fallthrough
-		case time.Saturday:
-			dayRus = "\nСуббота\n"
-			fieldPosEnd = 71
-			fieldPosStart = 84
-			result = result + dayRus + strings.Join(GenerateResponseFromTable(fieldPosStart, fieldPosEnd, groupName, rows), "\n") + "\n----------\n"
-			fallthrough
-		case time.Sunday:
-			dayRus = "Воскресенье"
-			//fieldPosEnd = 85
-			//fieldPosStart = 98
-			return result
+	switch format {
+	case WeekFormat:
+		var result strings.Builder
+		result.Grow(1024) // Предварительно выделяем память
+		for day := time.Monday; day <= time.Saturday; day++ {
+			ranges := dayRanges[day]
+			result.WriteString("\n" + dayNames[day] + "\n")
+			result.WriteString(strings.Join(GenerateResponseFromTable(ranges[1], ranges[0], groupName, rows), "\n"))
+			result.WriteString("\n----------\n")
 		}
-	} else if format == "🌞 День 🙋‍♂️" {
+		return result.String()
+
+	case DayFormat:
 		_, day, _, _ := NowTime()
-		switch day {
-		case time.Monday:
-			fieldPosEnd = 1
-			fieldPosStart = 14
-			return strings.Join(GenerateResponseFromTable(fieldPosStart, fieldPosEnd, groupName, rows), "\n")
-		case time.Tuesday:
-			fieldPosEnd = 15
-			fieldPosStart = 28
-			return strings.Join(GenerateResponseFromTable(fieldPosStart, fieldPosEnd, groupName, rows), "\n")
-		case time.Wednesday:
-			fieldPosEnd = 29
-			fieldPosStart = 42
-			return strings.Join(GenerateResponseFromTable(fieldPosStart, fieldPosEnd, groupName, rows), "\n")
-		case time.Thursday:
-			fieldPosEnd = 43
-			fieldPosStart = 56
-			return strings.Join(GenerateResponseFromTable(fieldPosStart, fieldPosEnd, groupName, rows), "\n")
-		case time.Friday:
-			fieldPosEnd = 57
-			fieldPosStart = 70
-			return strings.Join(GenerateResponseFromTable(fieldPosStart, fieldPosEnd, groupName, rows), "\n")
-		case time.Saturday:
-			fieldPosEnd = 71
-			fieldPosStart = 84
-			return strings.Join(GenerateResponseFromTable(fieldPosStart, fieldPosEnd, groupName, rows), "\n")
-		case time.Sunday:
-			//dayRus = "Воскресенье"
-			//fieldPosEnd = 85
-			//fieldPosStart = 98
-			return "У тебя выходной ;)" // Возвращаем пустую строку для воскресенья
+		if day == time.Sunday {
+			return "У тебя выходной ;)"
 		}
+		ranges := dayRanges[day]
+		var result strings.Builder
+		result.WriteString(dayNames[day] + "\n----------\n")
+		result.WriteString(strings.Join(GenerateResponseFromTable(ranges[1], ranges[0], groupName, rows), "\n"))
+		return result.String()
+
+	default:
+		return "Не нашел нужных данных :("
 	}
-	return "Не нашел нужных данных :( "
 }

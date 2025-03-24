@@ -9,6 +9,11 @@ import (
 	"tgbot/parser"
 )
 
+const adminID int64 = 925884466
+
+var awaitingAdminMessage bool
+var adminChatID int64
+
 func Bot() {
 	err := godotenv.Load("./resources/metadata/token/test_bot_token.env")
 	if err != nil {
@@ -65,38 +70,66 @@ func Bot() {
 			users[chatID] = user
 			if update.Message.Text == "🗓Расписание🗓" {
 				if user.EducationLevel == "" {
-					user.State = "waiting_for_education"
-					sendMessage(bot, chatID, "Выбери форму обучения", createEducationKeyboard)
+					sendKeyboardMessage(bot, chatID, "Выбери форму обучения", createEducationKeyboard, user, "waiting_for_education")
 				} else {
-					user.State = "waiting_for_course"
-					sendMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp)
+					sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp, user, "waiting_for_course")
 				}
 			} else if update.Message.Text == "👱‍♂️Найти препода👱" {
-				user.State = "teacher"
-				sendMessage(bot, chatID, "Напиши фамилию преподоваеля в формате (Иванов)", nil)
+				sendKeyboardMessage(bot, chatID, "Напиши фамилию преподоваеля в формате (Иванов)", nil, user, "teacher")
 			} else if update.Message.Text == "🏢Найти корпус🏫" {
-				user.State = "corpus_info"
-				sendMessage(bot, chatID, "Напиши номер корпуса", createCorpusNum)
+				sendKeyboardMessage(bot, chatID, "Напиши номер корпуса", createCorpusNum, user, "corpus_info")
 			} else if update.Message.Text == "/start" {
-				sendMessage(bot, chatID, "Привет, Я бот для помощи тебе в твоем обучении!", createHelloKeyboard)
-			} else {
-				sendMessage(bot, chatID, "Используй клавиатуру", createHelloKeyboard)
-			}
+				sendKeyboardMessage(bot, chatID, "Привет, Я бот для помощи тебе в твоем обучении!", createHelloKeyboard, user, "")
+			} else if update.Message.Text == "/send" {
+				if update.Message.From.ID != adminID {
+					sendKeyboardMessage(bot, chatID, "У вас нет прав для выполнения этой команды.", createHelloKeyboard, user, "")
+					break
+				}
+				awaitingAdminMessage = true
+				adminChatID = chatID
+				sendKeyboardMessage(bot, chatID, "Пожалуйста, введите сообщение, которое хотите отправить всем пользователям.", createHelloKeyboard, user, "")
+			} else if awaitingAdminMessage && update.Message.From.ID == adminID && chatID == adminChatID {
+				messageText := update.Message.Text
 
+				// Проверка на команду /cancel внутри блока отправки
+				if messageText == "/cancel" {
+					awaitingAdminMessage = false
+					sendKeyboardMessage(bot, chatID, "Рассылка отменена.", createHelloKeyboard, user, "")
+				} else {
+					usersList, err := userDAO.GetAllUsers()
+					if err != nil {
+						log.Printf("Ошибка получения списка пользователей: %s", err)
+						sendKeyboardMessage(bot, chatID, "Ошибка при отправке сообщений.", createHelloKeyboard, user, "")
+						awaitingAdminMessage = false
+						break
+					}
+
+					for _, u := range usersList {
+						_, err := bot.Send(tgbotapi.NewMessage(u.ID, messageText))
+						if err != nil {
+							log.Printf("Ошибка отправки сообщения пользователю %d: %s", u.ID, err)
+						}
+					}
+
+					sendKeyboardMessage(bot, chatID, "Сообщение успешно отправлено всем пользователям.", createHelloKeyboard, user, "")
+					awaitingAdminMessage = false
+				}
+			} else {
+				sendKeyboardMessage(bot, chatID, "Используй клавиатуру", createHelloKeyboard, user, "")
+			}
+		// выбор формы образования
 		case "waiting_for_education":
 			user.EducationLevel = update.Message.Text
 			switch user.EducationLevel {
 			case "Высшее":
-				user.State = "waiting_for_course"
-				sendMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp)
+
+				sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp, user, "waiting_for_course")
 			case "Среднее":
-				user.State = "waiting_for_course"
-				sendMessage(bot, chatID, "Выбери курс:", createCourseKeyboardDown)
+				sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardDown, user, "waiting_for_course")
 			case "⬅️Назад":
-				user.State = "hello"
-				sendMessage(bot, chatID, "Попробуем снова", createHelloKeyboard)
+				sendKeyboardMessage(bot, chatID, "Попробуем снова", createHelloKeyboard, user, "hello")
 			default:
-				sendMessage(bot, chatID, "Используй для этого клавиатуру", createEducationKeyboard)
+				sendKeyboardMessage(bot, chatID, "Используй для этого клавиатуру", createEducationKeyboard, user, "")
 			}
 			// Сохраняем пользователя в базе данных после изменения образования
 			user.UserName = update.Message.From.UserName
@@ -105,47 +138,39 @@ func Bot() {
 				log.Printf("Ошибка при сохранении пользователя в БД: %s", err)
 			}
 			users[chatID] = user
-
 		//выбор курса
 		case "waiting_for_course":
 			user.Course = update.Message.Text
 			if update.Message.Text == "⬅️Назад" {
-				sendMessage(bot, chatID, "Попробуем еще раз", createHelloKeyboard)
-				user.State = "hello"
+				sendKeyboardMessage(bot, chatID, "Попробуем еще раз", createHelloKeyboard, user, "hello")
 			} else if user.Course == "🤓 1 курс" || user.Course == "😎 2 курс" || user.Course == "🧐 3 курс" || user.Course == "🎓 4 курс" || user.Course == "🫠 5 курс" {
-				sendMessage(bot, chatID, "Выберите группу:", getGroupKeyboard(user.Course, user.EducationLevel))
-				user.State = "select_group"
+				sendKeyboardMessage(bot, chatID, "Выберите группу:", getGroupKeyboard(user.Course, user.EducationLevel), user, "select_group")
 			} else {
-				sendMessage(bot, chatID, "Нажми кнопочку на клавиатуре", createCourseKeyboardUp)
+				sendKeyboardMessage(bot, chatID, "Нажми кнопочку на клавиатуре", createCourseKeyboardUp, user, "")
 			}
 		// выбор группы
 		case "select_group":
 			user.Group = update.Message.Text
 
 			if update.Message.Text == "⬅️Назад" {
-				user.State = "waiting_for_course"
-				sendMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp)
+				sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp, user, "waiting_for_course")
 			} else {
 				if user.Format == "" {
-					sendMessage(bot, chatID, "Выбери формат вывода", createPrintKeyboard)
-					user.State = "select_format"
+					sendKeyboardMessage(bot, chatID, "Выбери формат вывода", createPrintKeyboard, user, "select_format")
 				} else {
 					schedule := parser.Tab(user.Group, user.Format, user.EducationLevel)
-					sendMessage(bot, chatID, schedule, createBackKeyboard)
-					user.State = "waiting_for_return"
+					sendKeyboardMessage(bot, chatID, schedule, createBackKeyboard, user, "waiting_for_return")
 				}
 
 			}
 		// выбор формата вывода
 		case "select_format":
 			if update.Message.Text == "⬅️Назад" {
-				user.State = "select_group"
-				sendMessage(bot, chatID, "Выберите группу:", getGroupKeyboard(user.Course, user.EducationLevel))
+				sendKeyboardMessage(bot, chatID, "Выберите группу:", getGroupKeyboard(user.Course, user.EducationLevel), user, "select_group")
 			} else {
 				user.Format = update.Message.Text
 				schedule := parser.Tab(user.Group, user.Format, user.EducationLevel)
-				sendMessage(bot, chatID, schedule, createBackKeyboard)
-				user.State = "waiting_for_return"
+				sendKeyboardMessage(bot, chatID, schedule, createBackKeyboard, user, "waiting_for_return")
 				user.UserName = update.Message.From.UserName
 
 				err := userDAO.SaveUser(user)
@@ -159,24 +184,18 @@ func Bot() {
 		case "waiting_for_return":
 			switch update.Message.Text {
 			case "📚 Курс":
-				user.State = "waiting_for_course"
-				sendMessage(bot, chatID, "Выберите курс:", createCourseKeyboardUp)
+				sendKeyboardMessage(bot, chatID, "Выберите курс:", createCourseKeyboardUp, user, "waiting_for_course")
 			case "🏫 Группа":
-				user.State = "select_group"
-				sendMessage(bot, chatID, "Выберите группу:", getGroupKeyboard(user.Course, user.EducationLevel))
+				sendKeyboardMessage(bot, chatID, "Выберите группу:", getGroupKeyboard(user.Course, user.EducationLevel), user, "select_group")
 			case "📋 Вывод":
-				user.State = "select_format"
-				sendMessage(bot, chatID, "Выберите формат вывода:", createPrintKeyboard)
+				sendKeyboardMessage(bot, chatID, "Выберите формат вывода:", createPrintKeyboard, user, "select_format")
 			case "🎓Образование":
-				user.State = "waiting_for_education"
-				sendMessage(bot, chatID, "Выберите форму обучения:", createEducationKeyboard)
+				sendKeyboardMessage(bot, chatID, "Выберите форму обучения:", createEducationKeyboard, user, "waiting_for_education")
 			case "〽️Начало":
-				user.State = "hello"
-				sendMessage(bot, chatID, "Чем еще помочь?", createHelloKeyboard)
+				sendKeyboardMessage(bot, chatID, "Чем еще помочь?", createHelloKeyboard, user, "hello")
 			default:
-				sendMessage(bot, chatID, "Нажми кнопку на клавиатуре", createBackKeyboard)
+				sendKeyboardMessage(bot, chatID, "Нажми кнопку на клавиатуре", createBackKeyboard, user, "")
 			}
-
 		// вывод учителя и его расписания
 		case "teacher":
 			surname := update.Message.Text
@@ -184,17 +203,15 @@ func Bot() {
 			teacher := parser.FindTeacher(surname)
 
 			if teacher == nil || teacher.Picture == "" {
-				user.State = "hello"
+				sendKeyboardMessage(bot, chatID, "Преподаватель "+surname+" не найден", createHelloKeyboard, user, "hello")
 				users[chatID] = user
-				sendMessage(bot, chatID, "Преподователь "+surname+" не найден", createHelloKeyboard)
 				break
 			}
 			// получение его пары на данный момент времени
 			lesson, _ := parser.FindCurrentLessons(teacher.FileName)
 
 			handleMediaGroupInfo(bot, chatID, teacher.Surname+teacher.Name+teacher.Text+lesson, teacher.Picture, "")
-			sendMessage(bot, chatID, "Чем еще помочь?", createHelloKeyboard)
-			user.State = "hello"
+			sendKeyboardMessage(bot, chatID, "Чем еще помочь?", createHelloKeyboard, user, "hello")
 		// нужны фотки и описание корпусов
 		case "corpus_info":
 			switch update.Message.Text {
@@ -215,103 +232,70 @@ func Bot() {
 			case "8":
 				handleMediaGroupInfo(bot, chatID, "Восьмой корпус\nнаходитьтся слева от корпуса пять в здании гимназии\nАдрес: Зиповская 3", "./resources/images/corpus/8_map.jpg", "./resources/images/corpus/8_corpus.jpg")
 			case "〽️Начало":
-				user.State = "hello"
-				sendMessage(bot, chatID, "Чем еще помочь?", createHelloKeyboard)
+				sendKeyboardMessage(bot, chatID, "Чем еще помочь?", createHelloKeyboard, user, "hello")
 			default:
-				sendMessage(bot, chatID, "Нажми цифру на клавиатуре", nil)
+				sendKeyboardMessage(bot, chatID, "Нажми цифру на клавиатуре", nil, user, "")
 			}
 		}
 	}
 }
 
-func sendMessage(api *tgbotapi.BotAPI, chatID int64, text string, keyboardFunc func() tgbotapi.ReplyKeyboardMarkup) {
+func sendKeyboardMessage(bot *tgbotapi.BotAPI, chatID int64, text string, keyboardFunc func() tgbotapi.ReplyKeyboardMarkup, user *database.User, newState string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	if keyboardFunc != nil {
 		msg.ReplyMarkup = keyboardFunc()
 	}
-	_, err := api.Send(msg)
+
+	_, err := bot.Send(msg)
 	if err != nil {
 		log.Printf("Ошибка при отправке сообщения: %v", err)
+		return
 	}
+
+	if newState != "" {
+		user.State = newState
+	}
+
+}
+
+var groupKeyboards = map[string]map[string]func() tgbotapi.ReplyKeyboardMarkup{
+	"Высшее": {
+		"🤓 1 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(1) },
+		"😎 2 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(2) },
+		"🧐 3 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(3) },
+		"🎓 4 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(4) },
+		"🫠 5 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(5) },
+	},
+	"Среднее": {
+		"🤓 1 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(7) },
+		"😎 2 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(8) },
+		"🧐 3 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(9) },
+		"🎓 4 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(10) },
+	},
 }
 
 func getGroupKeyboard(course, education string) func() tgbotapi.ReplyKeyboardMarkup {
-	switch education {
-	case "Высшее":
-		switch course {
-		case "🤓 1 курс":
-			return func() tgbotapi.ReplyKeyboardMarkup {
-				return createGroupKeyboardCourseById(1)
-			}
-		case "😎 2 курс":
-			return func() tgbotapi.ReplyKeyboardMarkup {
-				return createGroupKeyboardCourseById(2)
-			}
-		case "🧐 3 курс":
-			return func() tgbotapi.ReplyKeyboardMarkup {
-				return createGroupKeyboardCourseById(3)
-			}
-		case "🎓 4 курс":
-			return func() tgbotapi.ReplyKeyboardMarkup {
-				return createGroupKeyboardCourseById(4)
-			}
-		case "🫠 5 курс":
-			return func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(5) }
+	if eduMap, ok := groupKeyboards[education]; ok {
+		if kbFunc, ok := eduMap[course]; ok {
+			return kbFunc
 		}
-
-	case "Среднее":
-		switch course {
-		case "🤓 1 курс":
-			return func() tgbotapi.ReplyKeyboardMarkup {
-				return createGroupKeyboardCourseById(7)
-			}
-		case "😎 2 курс":
-			return func() tgbotapi.ReplyKeyboardMarkup {
-				return createGroupKeyboardCourseById(8)
-			}
-		case "🧐 3 курс":
-			return func() tgbotapi.ReplyKeyboardMarkup {
-				return createGroupKeyboardCourseById(9)
-			}
-		case "🎓 4 курс":
-			return func() tgbotapi.ReplyKeyboardMarkup {
-				return createGroupKeyboardCourseById(10)
-			}
-		}
-
-	default:
-		return nil
 	}
 	return nil
 }
 
 func handleMediaGroupInfo(api *tgbotapi.BotAPI, chatID int64, text, filePath1, filePath2 string) {
-	log.Println("Начало выполнения handleMediaGroupInfo")
-
 	media1 := tgbotapi.NewInputMediaPhoto(tgbotapi.FilePath(filePath1))
 	media1.Caption = text
 
-	var mediaGroup []interface{}
-	mediaGroup = append(mediaGroup, media1)
+	mediaGroup := []interface{}{media1}
 
-	log.Printf("Добавлено изображение: %s", filePath1)
-
-	// Проверяем, передан ли второй файл
 	if filePath2 != "" {
 		media2 := tgbotapi.NewInputMediaPhoto(tgbotapi.FilePath(filePath2))
 		mediaGroup = append(mediaGroup, media2)
-		log.Printf("Добавлено изображение: %s", filePath2)
-	} else {
-		log.Println("Второй файл не передан")
 	}
 
-	mediaGroupMsg := tgbotapi.NewMediaGroup(chatID, mediaGroup)
-
-	log.Println("Отправка медиагруппы в чат...")
-	_, err := api.Send(mediaGroupMsg)
+	_, err := api.Send(tgbotapi.NewMediaGroup(chatID, mediaGroup))
 	if err != nil {
 		log.Printf("Ошибка при отправке медиагруппы: %v", err)
-	} else {
-		log.Println("Медиагруппа успешно отправлена")
 	}
 }

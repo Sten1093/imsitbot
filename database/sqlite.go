@@ -75,6 +75,25 @@ func (dao *UserDAO) DeleteUser(userID int64) error {
 	return err
 }
 
+// GetAllUsers - получает список всех пользователей
+func (dao *UserDAO) GetAllUsers() ([]*User, error) {
+	rows, err := dao.db.Query("SELECT id, state, course, group_name, format, username, education_level FROM users")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*User
+	for rows.Next() {
+		var user User
+		if err := rows.Scan(&user.ID, &user.State, &user.Course, &user.Group, &user.Format, &user.UserName, &user.EducationLevel); err != nil {
+			return nil, err
+		}
+		users = append(users, &user)
+	}
+	return users, nil
+}
+
 // Close - закрывает базу данных
 func (dao *UserDAO) Close() {
 	dao.db.Close()

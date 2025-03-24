@@ -7,12 +7,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 )
 
 type Lesson struct {
-	StartTime string
-	Text      string
+	StartTime string `json:"start_time"`
+	Text      string `json:"text"`
 }
 
 var (
@@ -22,15 +21,12 @@ var (
 
 // Загружаем файл в кэш
 func getCachedFile(course int, fileName string) (*excelize.File, error) {
-	cacheLock.RLock()
-	if f, exists := fileCache[course]; exists {
-		cacheLock.RUnlock()
-		return f, nil
-	}
-	cacheLock.RUnlock()
-
 	cacheLock.Lock()
 	defer cacheLock.Unlock()
+
+	if f, exists := fileCache[course]; exists {
+		return f, nil
+	}
 
 	f, err := excelize.OpenFile(fileName)
 	if err != nil {
@@ -55,21 +51,14 @@ func FindCurrentLessons(teacherName string) (string, error) {
 	}
 
 	_, day, week, _ := NowTime()
-
-	weekDays := map[time.Weekday]string{
-		time.Monday:    "понедельник",
-		time.Tuesday:   "вторник",
-		time.Wednesday: "среда",
-		time.Thursday:  "четверг",
-		time.Friday:    "пятница",
-		time.Saturday:  "суббота",
-		time.Sunday:    "",
+	weekDays := [...]string{"", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"}
+	if int(day) >= len(weekDays) {
+		return "Неверный день недели", nil
 	}
-
 	dayStr := weekDays[day]
 
-	var lessons []Lesson
-	lessonSet := make(map[string]struct{}) // Map для проверки уникальности
+	lessons := make([]Lesson, 0, 10)
+	lessonSet := make(map[string]struct{})
 
 	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(teacherName) + `\b\s*`)
 
@@ -84,39 +73,36 @@ func FindCurrentLessons(teacherName string) (string, error) {
 			return "", fmt.Errorf("ошибка чтения строк: %v", err)
 		}
 
-		var previousRow []string
+		var previousStartTime string
 
 		for _, row := range rows {
 			if len(row) < 3 {
 				continue
 			}
+			if !strings.Contains(row[0], dayStr) {
+				continue
+			}
 
-			if strings.Contains(row[0], dayStr) {
-				for _, str := range row {
-					if strings.Contains(str, teacherName) {
-						cleanedLesson := strings.TrimSpace(re.ReplaceAllString(str, ""))
+			startTime := row[1]
+			if startTime == "" {
+				startTime = previousStartTime
+			} else {
+				previousStartTime = startTime
+			}
 
-						// Определяем StartTime
-						startTime := row[1]
-						if startTime == "" && len(previousRow) >= 2 {
-							startTime = previousRow[1]
-						}
-
-						lessonKey := fmt.Sprintf("%s|%s", startTime, cleanedLesson)
-
-						// Проверка на дубликаты
-						if _, exists := lessonSet[lessonKey]; !exists {
-							lessonSet[lessonKey] = struct{}{}
-							lessons = append(lessons, Lesson{
-								StartTime: startTime,
-								Text:      fmt.Sprintf("Время: %s\n%s", startTime, cleanedLesson),
-							})
-						}
+			for _, str := range row {
+				if strings.Contains(str, teacherName) {
+					cleanedLesson := strings.TrimSpace(re.ReplaceAllString(str, ""))
+					lessonKey := fmt.Sprintf("%s|%s", startTime, cleanedLesson)
+					if _, exists := lessonSet[lessonKey]; !exists {
+						lessonSet[lessonKey] = struct{}{}
+						lessons = append(lessons, Lesson{
+							StartTime: startTime,
+							Text:      fmt.Sprintf("Время: %s\n%s", startTime, cleanedLesson),
+						})
 					}
 				}
 			}
-			// Сохраняем текущую строку как предыдущую
-			previousRow = row
 		}
 	}
 
