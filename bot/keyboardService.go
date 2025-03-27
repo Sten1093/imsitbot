@@ -5,152 +5,122 @@ import (
 	"tgbot/parser"
 )
 
-const firstCourseName = "🤓 1 курс"
-const seconndCourseName = "😎 2 курс"
-const thirdCourseName = "🧐 3 курс"
-const fourthCourseName = "🎓 4 курс"
-const fiveCourseName = "🫠 5 курс"
-const backName = "⬅️Назад"
+// Константы для названий курсов и кнопок
+const (
+	FirstCourse  = "🤓 1 курс"
+	SecondCourse = "😎 2 курс"
+	ThirdCourse  = "🧐 3 курс"
+	FourthCourse = "🎓 4 курс"
+	FifthCourse  = "🫠 5 курс"
+	BackButton   = "⬅️Назад"
+	StartButton  = "〽️Начало"
+)
 
-// клавиатуры
-func createHelloKeyboard() tgbotapi.ReplyKeyboardMarkup {
-	return tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("🗓Расписание🗓"),
-			tgbotapi.NewKeyboardButton("👱‍♂️Найти препода👱"),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("🏢Найти корпус🏫"),
-		),
-	)
+// KeyboardConfig определяет конфигурацию клавиатуры
+type KeyboardConfig struct {
+	Buttons       []string
+	ButtonsPerRow int
+	AddBackButton bool
 }
-func createBackKeyboard() tgbotapi.ReplyKeyboardMarkup {
-	return tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("📚 Курс"),
-			tgbotapi.NewKeyboardButton("🏫 Группа"),
-			tgbotapi.NewKeyboardButton("📋 Вывод"),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("🎓Образование"),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("〽️Начало"),
-		),
-	)
-}
-func createPrintKeyboard() tgbotapi.ReplyKeyboardMarkup {
-	return tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("🌞 День 🙋‍♂️"),
-			tgbotapi.NewKeyboardButton("📅 Неделя"),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton(backName),
-		),
-	)
-}
-func createCourseKeyboardUp() tgbotapi.ReplyKeyboardMarkup {
-	return tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton(firstCourseName),
-			tgbotapi.NewKeyboardButton(seconndCourseName),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton(thirdCourseName),
-			tgbotapi.NewKeyboardButton(fourthCourseName),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton(fiveCourseName),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton(backName),
-		),
-	)
-}
-func createCourseKeyboardDown() tgbotapi.ReplyKeyboardMarkup {
-	return tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton(firstCourseName),
-			tgbotapi.NewKeyboardButton(seconndCourseName),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton(thirdCourseName),
-			tgbotapi.NewKeyboardButton(fourthCourseName),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton(backName),
-		),
-	)
-}
-func createCorpusNum() tgbotapi.ReplyKeyboardMarkup {
-	return tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("1"),
-			tgbotapi.NewKeyboardButton("2"),
-			tgbotapi.NewKeyboardButton("3"),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("4"),
-			tgbotapi.NewKeyboardButton("5"),
-			tgbotapi.NewKeyboardButton("6"),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("7"),
-			tgbotapi.NewKeyboardButton("8"),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("〽️Начало"),
-		),
-	)
-}
-func createGroupKeyboardCourseById(id int) tgbotapi.ReplyKeyboardMarkup {
-	groups := parser.GetGroups()
 
-	// Создание двумерного среза для хранения строк клавиатуры
+// createKeyboard создает клавиатуру на основе конфигурации
+func createKeyboard(config KeyboardConfig) tgbotapi.ReplyKeyboardMarkup {
 	var keyboard [][]tgbotapi.KeyboardButton
-
-	// Количество кнопок в строке
-	const buttonsPerRow = 3
-
-	// Временная строка для накопления кнопок
 	var row []tgbotapi.KeyboardButton
 
-	// Проходим по каждой группе
-	for _, group := range groups {
-		// Добавляем только те группы, у которых id == 1
-		if group.ID == id {
-			row = append(row, tgbotapi.NewKeyboardButton(group.TGName))
-
-			// Если накопили нужное количество кнопок, добавляем строку
-			if len(row) == buttonsPerRow {
-				keyboard = append(keyboard, row)
-				row = []tgbotapi.KeyboardButton{}
-			}
+	for _, btn := range config.Buttons {
+		row = append(row, tgbotapi.NewKeyboardButton(btn))
+		if len(row) == config.ButtonsPerRow {
+			keyboard = append(keyboard, row)
+			row = []tgbotapi.KeyboardButton{}
 		}
 	}
 
-	// Добавляем оставшиеся кнопки, если они есть
 	if len(row) > 0 {
 		keyboard = append(keyboard, row)
 	}
 
-	// Добавляем строку с кнопкой "⬅️Назад"
-	keyboard = append(keyboard, tgbotapi.NewKeyboardButtonRow(
-		tgbotapi.NewKeyboardButton("⬅️Назад"),
-	))
+	if config.AddBackButton {
+		keyboard = append(keyboard, tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(BackButton)))
+	}
 
-	// Возвращаем клавиатуру
 	return tgbotapi.NewReplyKeyboard(keyboard...)
 }
+
+// createHelloKeyboard создает начальную клавиатуру
+func createHelloKeyboard() tgbotapi.ReplyKeyboardMarkup {
+	return createKeyboard(KeyboardConfig{
+		Buttons:       []string{"🗓Расписание🗓", "👱‍♂️Найти препода👱", "🏢Найти корпус🏫"},
+		ButtonsPerRow: 2,
+	})
+}
+
+// createBackKeyboard создает клавиатуру возврата
+func createBackKeyboard() tgbotapi.ReplyKeyboardMarkup {
+	return createKeyboard(KeyboardConfig{
+		Buttons:       []string{"📚 Курс", "🏫 Группа", "📋 Вывод", "🎓Образование", StartButton},
+		ButtonsPerRow: 3,
+	})
+}
+
+// createPrintKeyboard создает клавиатуру выбора формата вывода
+func createPrintKeyboard() tgbotapi.ReplyKeyboardMarkup {
+	return createKeyboard(KeyboardConfig{
+		Buttons:       []string{"🌞 День 🙋‍♂️", "📅 Неделя"},
+		ButtonsPerRow: 2,
+		AddBackButton: true,
+	})
+}
+
+// createCourseKeyboardUp создает клавиатуру курсов для высшего образования
+func createCourseKeyboardUp() tgbotapi.ReplyKeyboardMarkup {
+	return createKeyboard(KeyboardConfig{
+		Buttons:       []string{FirstCourse, SecondCourse, ThirdCourse, FourthCourse, FifthCourse},
+		ButtonsPerRow: 2,
+		AddBackButton: true,
+	})
+}
+
+// createCourseKeyboardDown создает клавиатуру курсов для среднего образования
+func createCourseKeyboardDown() tgbotapi.ReplyKeyboardMarkup {
+	return createKeyboard(KeyboardConfig{
+		Buttons:       []string{FirstCourse, SecondCourse, ThirdCourse, FourthCourse},
+		ButtonsPerRow: 2,
+		AddBackButton: true,
+	})
+}
+
+// createCorpusNum создает клавиатуру номеров корпусов
+func createCorpusNum() tgbotapi.ReplyKeyboardMarkup {
+	return createKeyboard(KeyboardConfig{
+		Buttons:       []string{"1", "2", "3", "4", "5", "6", "7", "8", StartButton},
+		ButtonsPerRow: 3,
+	})
+}
+
+// createGroupKeyboardCourseById создает клавиатуру групп по ID курса
+func createGroupKeyboardCourseById(id int) tgbotapi.ReplyKeyboardMarkup {
+	groups := parser.GetGroups()
+	var groupButtons []string
+
+	for _, group := range groups {
+		if group.ID == id {
+			groupButtons = append(groupButtons, group.TGName)
+		}
+	}
+
+	return createKeyboard(KeyboardConfig{
+		Buttons:       groupButtons,
+		ButtonsPerRow: 3,
+		AddBackButton: true,
+	})
+}
+
+// createEducationKeyboard создает клавиатуру выбора образования
 func createEducationKeyboard() tgbotapi.ReplyKeyboardMarkup {
-	return tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("Высшее"),
-			tgbotapi.NewKeyboardButton("Среднее"),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("⬅️Назад"),
-		),
-	)
+	return createKeyboard(KeyboardConfig{
+		Buttons:       []string{"Высшее", "Среднее"},
+		ButtonsPerRow: 2,
+		AddBackButton: true,
+	})
 }

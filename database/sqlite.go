@@ -81,7 +81,9 @@ func (dao *UserDAO) GetAllUsers() ([]*User, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func(rows *sql.Rows) {
+		_ = rows.Close()
+	}(rows)
 
 	var users []*User
 	for rows.Next() {
@@ -96,5 +98,9 @@ func (dao *UserDAO) GetAllUsers() ([]*User, error) {
 
 // Close - закрывает базу данных
 func (dao *UserDAO) Close() {
-	dao.db.Close()
+	if err := dao.db.Close(); err != nil {
+		log.Printf("Ошибка при закрытии базы данных: %v", err)
+	} else {
+		log.Println("База данных успешно закрыта")
+	}
 }

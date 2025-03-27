@@ -92,7 +92,7 @@ func handleState(bot *tgbotapi.BotAPI, update tgbotapi.Update, user *database.Us
 	case "select_format":
 		handleFormatState(bot, chatID, text, user, userDAO, users)
 	case "waiting_for_return":
-		handleReturnState(bot, chatID, text, user)
+		handleReturnState(bot, chatID, text, user, userDAO)
 	case "teacher":
 		handleTeacherState(bot, chatID, text, user)
 	case "corpus_info":
@@ -227,7 +227,8 @@ func handleFormatState(bot *tgbotapi.BotAPI, chatID int64, text string, user *da
 }
 
 // Обработка состояния ожидания возврата
-func handleReturnState(bot *tgbotapi.BotAPI, chatID int64, text string, user *database.User) {
+func handleReturnState(bot *tgbotapi.BotAPI, chatID int64, text string, user *database.User, userDAO *database.UserDAO) {
+	saveUserStateOnly(user, userDAO, chatID)
 	switch text {
 	case "📚 Курс":
 		sendKeyboardMessage(bot, chatID, "Выберите курс:", createCourseKeyboardUp, user, "waiting_for_course")
@@ -284,10 +285,22 @@ func handleCorpusState(bot *tgbotapi.BotAPI, chatID int64, text string, user *da
 	}
 }
 
-// Сохранение пользователя
+// Сохранение пользователя (все данные)
 func saveUser(user *database.User, userDAO *database.UserDAO, chatID int64) {
 	if err := userDAO.SaveUser(user); err != nil {
 		log.Printf("Ошибка сохранения пользователя %d: %s", chatID, err)
+	}
+}
+
+// Сохранение только состояния пользователя
+func saveUserStateOnly(user *database.User, userDAO *database.UserDAO, chatID int64) {
+	// Создаем временного пользователя с только ID и State для обновления в БД
+	tempUser := &database.User{
+		ID:    chatID,
+		State: user.State,
+	}
+	if err := userDAO.SaveUser(tempUser); err != nil {
+		log.Printf("Ошибка сохранения состояния пользователя %d: %s", chatID, err)
 	}
 }
 
