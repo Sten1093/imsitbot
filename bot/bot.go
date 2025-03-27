@@ -17,27 +17,23 @@ var adminChatID int64
 func Bot() {
 	err := godotenv.Load("./resources/metadata/token/test_bot_token.env")
 	if err != nil {
-		log.Fatal("Ошибка загрузки токена")
+		log.Fatal("Ошибка загрузки токена: ", err)
 	}
 
 	botToken := os.Getenv("BOT_TOKEN")
-	dbPath := "./resources/data/users.sqlite"
+	const dbPath = "./resources/data/users.sqlite"
 
 	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Ошибка инициализации бота: ", err)
 	}
-
 	log.Printf("Авторизован как %s", bot.Self.UserName)
 
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-
-	updates := bot.GetUpdatesChan(u)
+	updates := configureUpdates(bot)
 	userDAO := database.NewUserDAO(dbPath)
 	defer userDAO.Close()
 
-	users := make(map[int64]*database.User) // Локальный кеш пользователей
+	users := make(map[int64]*database.User)
 
 	for update := range updates {
 		if update.Message == nil {
@@ -45,201 +41,257 @@ func Bot() {
 		}
 
 		chatID := update.Message.Chat.ID
-		user, exists := users[chatID]
+		user := getOrCreateUser(chatID, userDAO, users)
+		log.Printf("Сообщение от %s: %s", update.Message.From.UserName, update.Message.Text)
 
-		if !exists {
-			dbUser, err := userDAO.GetUser(chatID)
-			if err == nil && dbUser != nil {
-				user = dbUser
-			} else {
-				user = &database.User{ID: chatID, State: "hello"}
-				err := userDAO.SaveUser(user)
-				if err != nil {
-					log.Printf("Ошибка при сохранении нового пользователя: %s", err)
-				}
-			}
-			users[chatID] = user
+		handleState(bot, update, user, userDAO, users)
+	}
+}
+
+// Настройка канала обновлений
+func configureUpdates(bot *tgbotapi.BotAPI) tgbotapi.UpdatesChannel {
+	u := tgbotapi.NewUpdate(0)
+	u.Timeout = 60
+	return bot.GetUpdatesChan(u)
+}
+
+// Получение или создание пользователя
+func getOrCreateUser(chatID int64, userDAO *database.UserDAO, users map[int64]*database.User) *database.User {
+	if user, exists := users[chatID]; exists {
+		return user
+	}
+
+	dbUser, err := userDAO.GetUser(chatID)
+	if err == nil && dbUser != nil {
+		users[chatID] = dbUser
+		return dbUser
+	}
+
+	user := &database.User{ID: chatID, State: "hello"}
+	if err := userDAO.SaveUser(user); err != nil {
+		log.Printf("Ошибка сохранения нового пользователя: %s", err)
+	}
+	users[chatID] = user
+	return user
+}
+
+// Обработка состояний
+func handleState(bot *tgbotapi.BotAPI, update tgbotapi.Update, user *database.User, userDAO *database.UserDAO, users map[int64]*database.User) {
+	chatID := update.Message.Chat.ID
+	text := update.Message.Text
+
+	switch user.State {
+	case "hello":
+		handleHelloState(bot, update, user, userDAO, users)
+	case "waiting_for_education":
+		handleEducationState(bot, chatID, text, user, userDAO)
+	case "waiting_for_course":
+		handleCourseState(bot, chatID, text, user)
+	case "select_group":
+		handleGroupState(bot, chatID, text, user)
+	case "select_format":
+		handleFormatState(bot, chatID, text, user, userDAO, users)
+	case "waiting_for_return":
+		handleReturnState(bot, chatID, text, user)
+	case "teacher":
+		handleTeacherState(bot, chatID, text, user)
+	case "corpus_info":
+		handleCorpusState(bot, chatID, text, user)
+	}
+}
+
+// Обработка состояния "hello"
+func handleHelloState(bot *tgbotapi.BotAPI, update tgbotapi.Update, user *database.User, userDAO *database.UserDAO, users map[int64]*database.User) {
+	chatID := update.Message.Chat.ID
+	text := update.Message.Text
+
+	users[chatID] = user
+	switch text {
+	case "🗓Расписание🗓":
+		if user.EducationLevel == "" {
+			sendKeyboardMessage(bot, chatID, "Выбери форму обучения", createEducationKeyboard, user, "waiting_for_education")
+		} else {
+			sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp, user, "waiting_for_course")
 		}
-
-		log.Printf("Получено сообщение от %s: %s", update.Message.From.UserName, update.Message.Text)
-
-		switch user.State {
-
-		// выбор расписания/корпуса/препода
-		case "hello":
-			users[chatID] = user
-			if update.Message.Text == "🗓Расписание🗓" {
-				if user.EducationLevel == "" {
-					sendKeyboardMessage(bot, chatID, "Выбери форму обучения", createEducationKeyboard, user, "waiting_for_education")
-				} else {
-					sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp, user, "waiting_for_course")
-				}
-			} else if update.Message.Text == "👱‍♂️Найти препода👱" {
-				sendKeyboardMessage(bot, chatID, "Напиши фамилию преподоваеля в формате (Иванов)", nil, user, "teacher")
-			} else if update.Message.Text == "🏢Найти корпус🏫" {
-				sendKeyboardMessage(bot, chatID, "Напиши номер корпуса", createCorpusNum, user, "corpus_info")
-			} else if update.Message.Text == "/start" {
-				sendKeyboardMessage(bot, chatID, "Привет, Я бот для помощи тебе в твоем обучении!", createHelloKeyboard, user, "")
-			} else if update.Message.Text == "/send" {
-				if update.Message.From.ID != adminID {
-					sendKeyboardMessage(bot, chatID, "У вас нет прав для выполнения этой команды.", createHelloKeyboard, user, "")
-					break
-				}
-				awaitingAdminMessage = true
-				adminChatID = chatID
-				sendKeyboardMessage(bot, chatID, "Пожалуйста, введите сообщение, которое хотите отправить всем пользователям.", createHelloKeyboard, user, "")
-			} else if awaitingAdminMessage && update.Message.From.ID == adminID && chatID == adminChatID {
-				messageText := update.Message.Text
-
-				// Проверка на команду /cancel внутри блока отправки
-				if messageText == "/cancel" {
-					awaitingAdminMessage = false
-					sendKeyboardMessage(bot, chatID, "Рассылка отменена.", createHelloKeyboard, user, "")
-				} else {
-					usersList, err := userDAO.GetAllUsers()
-					if err != nil {
-						log.Printf("Ошибка получения списка пользователей: %s", err)
-						sendKeyboardMessage(bot, chatID, "Ошибка при отправке сообщений.", createHelloKeyboard, user, "")
-						awaitingAdminMessage = false
-						break
-					}
-
-					for _, u := range usersList {
-						_, err := bot.Send(tgbotapi.NewMessage(u.ID, messageText))
-						if err != nil {
-							log.Printf("Ошибка отправки сообщения пользователю %d: %s", u.ID, err)
-						}
-					}
-
-					sendKeyboardMessage(bot, chatID, "Сообщение успешно отправлено всем пользователям.", createHelloKeyboard, user, "")
-					awaitingAdminMessage = false
-				}
-			} else {
-				sendKeyboardMessage(bot, chatID, "Используй клавиатуру", createHelloKeyboard, user, "")
-			}
-		// выбор формы образования
-		case "waiting_for_education":
-			user.EducationLevel = update.Message.Text
-			switch user.EducationLevel {
-			case "Высшее":
-
-				sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp, user, "waiting_for_course")
-			case "Среднее":
-				sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardDown, user, "waiting_for_course")
-			case "⬅️Назад":
-				sendKeyboardMessage(bot, chatID, "Попробуем снова", createHelloKeyboard, user, "hello")
-			default:
-				sendKeyboardMessage(bot, chatID, "Используй для этого клавиатуру", createEducationKeyboard, user, "")
-			}
-			// Сохраняем пользователя в базе данных после изменения образования
-			user.UserName = update.Message.From.UserName
-			err := userDAO.SaveUser(user)
-			if err != nil {
-				log.Printf("Ошибка при сохранении пользователя в БД: %s", err)
-			}
-			users[chatID] = user
-		//выбор курса
-		case "waiting_for_course":
-			user.Course = update.Message.Text
-			if update.Message.Text == "⬅️Назад" {
-				sendKeyboardMessage(bot, chatID, "Попробуем еще раз", createHelloKeyboard, user, "hello")
-			} else if user.Course == "🤓 1 курс" || user.Course == "😎 2 курс" || user.Course == "🧐 3 курс" || user.Course == "🎓 4 курс" || user.Course == "🫠 5 курс" {
-				sendKeyboardMessage(bot, chatID, "Выберите группу:", getGroupKeyboard(user.Course, user.EducationLevel), user, "select_group")
-			} else {
-				sendKeyboardMessage(bot, chatID, "Нажми кнопочку на клавиатуре", createCourseKeyboardUp, user, "")
-			}
-		// выбор группы
-		case "select_group":
-			user.Group = update.Message.Text
-
-			if update.Message.Text == "⬅️Назад" {
-				sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp, user, "waiting_for_course")
-			} else {
-				if user.Format == "" {
-					sendKeyboardMessage(bot, chatID, "Выбери формат вывода", createPrintKeyboard, user, "select_format")
-				} else {
-					schedule := parser.Tab(user.Group, user.Format, user.EducationLevel)
-					sendKeyboardMessage(bot, chatID, schedule, createBackKeyboard, user, "waiting_for_return")
-				}
-
-			}
-		// выбор формата вывода
-		case "select_format":
-			if update.Message.Text == "⬅️Назад" {
-				sendKeyboardMessage(bot, chatID, "Выберите группу:", getGroupKeyboard(user.Course, user.EducationLevel), user, "select_group")
-			} else {
-				user.Format = update.Message.Text
-				schedule := parser.Tab(user.Group, user.Format, user.EducationLevel)
-				sendKeyboardMessage(bot, chatID, schedule, createBackKeyboard, user, "waiting_for_return")
-				user.UserName = update.Message.From.UserName
-
-				err := userDAO.SaveUser(user)
-				if err != nil {
-					log.Printf("Ошибка при сохранении пользователя в БД: %s", err)
-				}
-				// Удаляем пользователя из кеша, чтобы не хранить лишние данные
-				delete(users, chatID)
-			}
-		// ожидание выбора возврата
-		case "waiting_for_return":
-			switch update.Message.Text {
-			case "📚 Курс":
-				sendKeyboardMessage(bot, chatID, "Выберите курс:", createCourseKeyboardUp, user, "waiting_for_course")
-			case "🏫 Группа":
-				sendKeyboardMessage(bot, chatID, "Выберите группу:", getGroupKeyboard(user.Course, user.EducationLevel), user, "select_group")
-			case "📋 Вывод":
-				sendKeyboardMessage(bot, chatID, "Выберите формат вывода:", createPrintKeyboard, user, "select_format")
-			case "🎓Образование":
-				sendKeyboardMessage(bot, chatID, "Выберите форму обучения:", createEducationKeyboard, user, "waiting_for_education")
-			case "〽️Начало":
-				sendKeyboardMessage(bot, chatID, "Чем еще помочь?", createHelloKeyboard, user, "hello")
-			default:
-				sendKeyboardMessage(bot, chatID, "Нажми кнопку на клавиатуре", createBackKeyboard, user, "")
-			}
-		// вывод учителя и его расписания
-		case "teacher":
-			surname := update.Message.Text
-			// получение учителя из списка
-			teacher := parser.FindTeacher(surname)
-
-			if teacher == nil || teacher.Picture == "" {
-				sendKeyboardMessage(bot, chatID, "Преподаватель "+surname+" не найден", createHelloKeyboard, user, "hello")
-				users[chatID] = user
-				break
-			}
-			// получение его пары на данный момент времени
-			lesson, _ := parser.FindCurrentLessons(teacher.FileName)
-
-			handleMediaGroupInfo(bot, chatID, teacher.Surname+teacher.Name+teacher.Text+lesson, teacher.Picture, "")
-			sendKeyboardMessage(bot, chatID, "Чем еще помочь?", createHelloKeyboard, user, "hello")
-		// нужны фотки и описание корпусов
-		case "corpus_info":
-			switch update.Message.Text {
-			case "1":
-				handleMediaGroupInfo(bot, chatID, "Эот наш главный корпус\nОриентиром тут послужит огромная парковка(курилка)\nАдрес: Зиповская, д.5", "./resources/images/corpus/1_map.jpg", "./resources/images/corpus/1_corpus.jpg") // 1 карта 2 корпус
-			case "2":
-				handleMediaGroupInfo(bot, chatID, "Второй корпус или (Сбербанк)\nНаходиться на пересечении зиповской и московской. А наш ориентиир это компьютерный клуб Fenix\nАдрес: Зиповская 8", "./resources/images/corpus/2_map.jpg", "./resources/images/corpus/2_corpus.jpg")
-			case "3":
-				handleMediaGroupInfo(bot, chatID, "Третий корпус\nНаходиться за трамвайными путями по правой стороне\nАдрес: Зиповская 12", "./resources/images/corpus/3_map.jpg", "./resources/images/corpus/3_corpus.jpg")
-			case "4":
-				handleMediaGroupInfo(bot, chatID, "Четвертый корпус\nНаш ориентиир это SubWay а точнее слева от него\nАдрес: Зиповская 5/2", "./resources/images/corpus/4_map.jpg", "./resources/images/corpus/4_corpus.jpg")
-			case "5":
-				handleMediaGroupInfo(bot, chatID, "Пятый корпус (школа)\nНаходиться в пристройке бывшей гимназии имсит. Но только не путай наш вход с торца а не главный\nАдрес: Зиповская 8", "./resources/images/corpus/5_map.jpg", "./resources/images/corpus/5_corpus.jpg")
-			case "6":
-				handleMediaGroupInfo(bot, chatID, "Шестой корпус(Дизайнеры)\nнаходиьтся за углом от мфц напротив входа в главный корпус\nАдрес: Зиповская 5к1", "./resources/images/corpus/6_map.jpg", "./resources/images/corpus/6_corpus.jpg")
-			case "7":
-				handleMediaGroupInfo(bot, chatID, "Седьмой корпус\nНаходиьтся сразу за главным", "./resources/images/corpus/7_map.jpg", "./resources/images/corpus/7_corpus.jpg")
-			case "8":
-				handleMediaGroupInfo(bot, chatID, "Восьмой корпус\nнаходитьтся слева от корпуса пять в здании гимназии\nАдрес: Зиповская 3", "./resources/images/corpus/8_map.jpg", "./resources/images/corpus/8_corpus.jpg")
-			case "〽️Начало":
-				sendKeyboardMessage(bot, chatID, "Чем еще помочь?", createHelloKeyboard, user, "hello")
-			default:
-				sendKeyboardMessage(bot, chatID, "Нажми цифру на клавиатуре", nil, user, "")
-			}
+	case "👱‍♂️Найти препода👱":
+		sendKeyboardMessage(bot, chatID, "Напиши фамилию преподавателя в формате (Иванов)", nil, user, "teacher")
+	case "🏢Найти корпус🏫":
+		sendKeyboardMessage(bot, chatID, "Напиши номер корпуса", createCorpusNum, user, "corpus_info")
+	case "/start":
+		sendKeyboardMessage(bot, chatID, "Привет, Я бот для помощи тебе в твоем обучении!", createHelloKeyboard, user, "")
+	case "/send":
+		if update.Message.From.ID != adminID {
+			sendKeyboardMessage(bot, chatID, "У вас нет прав для выполнения этой команды.", createHelloKeyboard, user, "")
+			return
+		}
+		awaitingAdminMessage = true
+		adminChatID = chatID
+		sendKeyboardMessage(bot, chatID, "Пожалуйста, введите сообщение для всех пользователей.", createHelloKeyboard, user, "")
+	default:
+		if awaitingAdminMessage && update.Message.From.ID == adminID && chatID == adminChatID {
+			handleAdminMessage(bot, chatID, text, userDAO)
+		} else {
+			sendKeyboardMessage(bot, chatID, "Используй клавиатуру", createHelloKeyboard, user, "")
 		}
 	}
 }
 
+// Обработка сообщения администратора
+func handleAdminMessage(bot *tgbotapi.BotAPI, chatID int64, messageText string, userDAO *database.UserDAO) {
+	if messageText == "/cancel" {
+		awaitingAdminMessage = false
+		sendKeyboardMessage(bot, chatID, "Рассылка отменена.", createHelloKeyboard, nil, "")
+		return
+	}
+
+	usersList, err := userDAO.GetAllUsers()
+	if err != nil {
+		log.Printf("Ошибка получения списка пользователей: %s", err)
+		sendKeyboardMessage(bot, chatID, "Ошибка при отправке сообщений.", createHelloKeyboard, nil, "")
+		awaitingAdminMessage = false
+		return
+	}
+
+	for _, u := range usersList {
+		if _, err := bot.Send(tgbotapi.NewMessage(u.ID, messageText)); err != nil {
+			log.Printf("Ошибка отправки сообщения пользователю %d: %s", u.ID, err)
+		}
+	}
+
+	sendKeyboardMessage(bot, chatID, "Сообщение успешно отправлено всем пользователям.", createHelloKeyboard, nil, "")
+	awaitingAdminMessage = false
+}
+
+// Обработка состояния выбора формы образования
+func handleEducationState(bot *tgbotapi.BotAPI, chatID int64, text string, user *database.User, userDAO *database.UserDAO) {
+	user.EducationLevel = text
+	switch text {
+	case "Высшее":
+		sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp, user, "waiting_for_course")
+	case "Среднее":
+		sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardDown, user, "waiting_for_course")
+	case "⬅️Назад":
+		sendKeyboardMessage(bot, chatID, "Попробуем снова", createHelloKeyboard, user, "hello")
+	default:
+		sendKeyboardMessage(bot, chatID, "Используй клавиатуру", createEducationKeyboard, user, "")
+		return
+	}
+	saveUser(user, userDAO, chatID)
+}
+
+// Обработка состояния выбора курса
+func handleCourseState(bot *tgbotapi.BotAPI, chatID int64, text string, user *database.User) {
+	user.Course = text
+	switch text {
+	case "⬅️Назад":
+		sendKeyboardMessage(bot, chatID, "Попробуем еще раз", createHelloKeyboard, user, "hello")
+	case "🤓 1 курс", "😎 2 курс", "🧐 3 курс", "🎓 4 курс", "🫠 5 курс":
+		sendKeyboardMessage(bot, chatID, "Выберите группу:", getGroupKeyboard(user.Course, user.EducationLevel), user, "select_group")
+	default:
+		keyboard := createCourseKeyboardUp
+		if user.EducationLevel == "Среднее" {
+			keyboard = createCourseKeyboardDown
+		}
+		sendKeyboardMessage(bot, chatID, "Нажми кнопочку на клавиатуре", keyboard, user, "")
+	}
+}
+
+// Обработка состояния выбора группы
+func handleGroupState(bot *tgbotapi.BotAPI, chatID int64, text string, user *database.User) {
+	user.Group = text
+	if text == "⬅️Назад" {
+		sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp, user, "waiting_for_course")
+		return
+	}
+
+	if user.Format == "" {
+		sendKeyboardMessage(bot, chatID, "Выбери формат вывода", createPrintKeyboard, user, "select_format")
+	} else {
+		schedule := parser.Tab(user.Group, user.Format, user.EducationLevel)
+		sendKeyboardMessage(bot, chatID, schedule, createBackKeyboard, user, "waiting_for_return")
+	}
+}
+
+// Обработка состояния выбора формата вывода
+func handleFormatState(bot *tgbotapi.BotAPI, chatID int64, text string, user *database.User, userDAO *database.UserDAO, users map[int64]*database.User) {
+	if text == "⬅️Назад" {
+		sendKeyboardMessage(bot, chatID, "Выберите группу:", getGroupKeyboard(user.Course, user.EducationLevel), user, "select_group")
+		return
+	}
+
+	user.Format = text
+	schedule := parser.Tab(user.Group, user.Format, user.EducationLevel)
+	sendKeyboardMessage(bot, chatID, schedule, createBackKeyboard, user, "waiting_for_return")
+	saveUser(user, userDAO, chatID)
+	delete(users, chatID)
+}
+
+// Обработка состояния ожидания возврата
+func handleReturnState(bot *tgbotapi.BotAPI, chatID int64, text string, user *database.User) {
+	switch text {
+	case "📚 Курс":
+		sendKeyboardMessage(bot, chatID, "Выберите курс:", createCourseKeyboardUp, user, "waiting_for_course")
+	case "🏫 Группа":
+		sendKeyboardMessage(bot, chatID, "Выберите группу:", getGroupKeyboard(user.Course, user.EducationLevel), user, "select_group")
+	case "📋 Вывод":
+		sendKeyboardMessage(bot, chatID, "Выберите формат вывода:", createPrintKeyboard, user, "select_format")
+	case "🎓Образование":
+		sendKeyboardMessage(bot, chatID, "Выберите форму обучения:", createEducationKeyboard, user, "waiting_for_education")
+	case "〽️Начало":
+		sendKeyboardMessage(bot, chatID, "Чем еще помочь?", createHelloKeyboard, user, "hello")
+	default:
+		sendKeyboardMessage(bot, chatID, "Нажми кнопку на клавиатуре", createBackKeyboard, user, "")
+	}
+}
+
+// Обработка состояния поиска преподавателя
+func handleTeacherState(bot *tgbotapi.BotAPI, chatID int64, text string, user *database.User) {
+	teacher := parser.FindTeacher(text)
+	if teacher == nil || teacher.Picture == "" {
+		sendKeyboardMessage(bot, chatID, "Преподаватель "+text+" не найден", createHelloKeyboard, user, "hello")
+		return
+	}
+
+	lesson, _ := parser.FindCurrentLessons(teacher.FileName)
+	info := teacher.Surname + teacher.Name + teacher.Text + lesson
+	handleMediaGroupInfo(bot, chatID, info, teacher.Picture, "")
+	sendKeyboardMessage(bot, chatID, "Чем еще помочь?", createHelloKeyboard, user, "hello")
+}
+
+// Обработка состояния информации о корпусе
+func handleCorpusState(bot *tgbotapi.BotAPI, chatID int64, text string, user *database.User) {
+	corpusInfo := map[string]struct {
+		description string
+		mapImg      string
+		corpusImg   string
+	}{
+		"1": {"Эот наш главный корпус\nОриентиром тут послужит огромная парковка(курилка)\nАдрес: Зиповская, д.5", "./resources/images/corpus/1_map.jpg", "./resources/images/corpus/1_corpus.jpg"},
+		"2": {"Второй корпус или (Сбербанк)\nНаходиться на пересечении зиповской и московской. А наш ориентиир это компьютерный клуб Fenix\nАдрес: Зиповская 8", "./resources/images/corpus/2_map.jpg", "./resources/images/corpus/2_corpus.jpg"},
+		"3": {"Третий корпус\nНаходиться за трамвайными путями по правой стороне\nАдрес: Зиповская 12", "./resources/images/corpus/3_map.jpg", "./resources/images/corpus/3_corpus.jpg"},
+		"4": {"Четвертый корпус\nНаш ориентиир это SubWay а точнее слева от него\nАдрес: Зиповская 5/2", "./resources/images/corpus/4_map.jpg", "./resources/images/corpus/4_corpus.jpg"},
+		"5": {"Пятый корпус (школа)\nНаходиться в пристройке бывшей гимназии имсит. Но только не путай наш вход с торца а не главный\nАдрес: Зиповская 8", "./resources/images/corpus/5_map.jpg", "./resources/images/corpus/5_corpus.jpg"},
+		"6": {"Шестой корпус(Дизайнеры)\nнаходиьтся за углом от мфц напротив входа в главный корпус\nАдрес: Зиповская 5к1", "./resources/images/corpus/6_map.jpg", "./resources/images/corpus/6_corpus.jpg"},
+		"7": {"Седьмой корпус\nНаходиьтся сразу за главным", "./resources/images/corpus/7_map.jpg", "./resources/images/corpus/7_corpus.jpg"},
+		"8": {"Восьмой корпус\nнаходитьтся слева от корпуса пять в здании гимназии\nАдрес: Зиповская 3", "./resources/images/corpus/8_map.jpg", "./resources/images/corpus/8_corpus.jpg"},
+	}
+
+	if info, exists := corpusInfo[text]; exists {
+		handleMediaGroupInfo(bot, chatID, info.description, info.mapImg, info.corpusImg)
+	} else if text == "〽️Начало" {
+		sendKeyboardMessage(bot, chatID, "Чем еще помочь?", createHelloKeyboard, user, "hello")
+	} else {
+		sendKeyboardMessage(bot, chatID, "Нажми цифру на клавиатуре", createCorpusNum, user, "")
+	}
+}
+
+// Сохранение пользователя
+func saveUser(user *database.User, userDAO *database.UserDAO, chatID int64) {
+	if err := userDAO.SaveUser(user); err != nil {
+		log.Printf("Ошибка сохранения пользователя %d: %s", chatID, err)
+	}
+}
+
+// Существующие функции из вашего кода
 func sendKeyboardMessage(bot *tgbotapi.BotAPI, chatID int64, text string, keyboardFunc func() tgbotapi.ReplyKeyboardMarkup, user *database.User, newState string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	if keyboardFunc != nil {
@@ -255,7 +307,6 @@ func sendKeyboardMessage(bot *tgbotapi.BotAPI, chatID int64, text string, keyboa
 	if newState != "" {
 		user.State = newState
 	}
-
 }
 
 var groupKeyboards = map[string]map[string]func() tgbotapi.ReplyKeyboardMarkup{
