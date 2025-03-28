@@ -45,6 +45,7 @@ func GetTeacher() []Teacher {
 		{"Цебренко", "Цебренко К.Н.", " Константин Николаевич", "\n", "./resources/images/teacher/Цебренко Константин Николаевич.jpg"},                                                                 //AgACAgIAAxkBAAIMTmezmWhi_-hUIPuPqtpbpXvnY_90AAIm6jEbElWZSRe1fE_tcLobAQADAgADbQADNgQ
 		{"Шепель", "Шепель Э.В.", " Элона Вячеславна", "\n", "./resources/images/teacher/Шепель Элона Вячеславна.png"},                                                                                 //AgACAgIAAxkBAAIMUGezmWuDiv8jn3RDLS6DBs-YDBQlAAIn6jEbElWZSQVKZPG2xV7jAQADAgADbQADNgQ
 		{"Шпехт", "Шпехт И.А.", " Ирина Александровна", "\n", "./resources/images/teacher/Шпехт Ирина Александровна.jpg"},                                                                              //AgACAgIAAxkBAAIMUmezmW6A4N4dH-AFyJOvvdaSMFBVAAIo6jEbElWZSS1D7zxsY7koAQADAgADeAADNgQ
+		{"Мулькxо", "Мулько Г.А.", " Герман Андреевич", "\n", "./resources/images/teacher/Мулько Герман Андреевич.jpg"},
 	}
 }
 
