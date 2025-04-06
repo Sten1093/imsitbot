@@ -51,6 +51,10 @@ func FindCurrentLessons(teacherName string) (string, error) {
 	}
 
 	_, day, week, _ := NowTime()
+
+	if day == 0 {
+		day = 1
+	}
 	weekDays := [...]string{"", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"}
 	if int(day) >= len(weekDays) {
 		return "Неверный день недели", nil

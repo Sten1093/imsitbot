@@ -15,7 +15,7 @@ var awaitingAdminMessage bool
 var adminChatID int64
 
 func Bot() {
-	err := godotenv.Load("./resources/metadata/token/activity_bot_token.env")
+	err := godotenv.Load("./resources/metadata/token/test_bot_token.env")
 	if err != nil {
 		log.Fatal("Ошибка загрузки токена: ", err)
 	}
