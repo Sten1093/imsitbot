@@ -111,7 +111,11 @@ func handleHelloState(bot *tgbotapi.BotAPI, update tgbotapi.Update, user *databa
 		if user.EducationLevel == "" {
 			sendKeyboardMessage(bot, chatID, "Выбери форму обучения", createEducationKeyboard, user, "waiting_for_education")
 		} else {
-			sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp, user, "waiting_for_course")
+			if user.EducationLevel == Secondary {
+				sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardDown, user, "waiting_for_course")
+			} else {
+				sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp, user, "waiting_for_course")
+			}
 		}
 	case "👱‍♂️Найти препода👱":
 		sendKeyboardMessage(bot, chatID, "Напиши фамилию преподавателя в формате (Иванов)", nil, user, "teacher")
@@ -164,13 +168,14 @@ func handleAdminMessage(bot *tgbotapi.BotAPI, chatID int64, messageText string, 
 
 // Обработка состояния выбора формы образования
 func handleEducationState(bot *tgbotapi.BotAPI, chatID int64, text string, user *database.User, userDAO *database.UserDAO) {
-	user.EducationLevel = text
 	switch text {
-	case "Высшее":
+	case Higher:
+		user.EducationLevel = text
 		sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp, user, "waiting_for_course")
-	case "Среднее":
+	case Secondary:
+		user.EducationLevel = text
 		sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardDown, user, "waiting_for_course")
-	case "⬅️Назад":
+	case BackButton:
 		sendKeyboardMessage(bot, chatID, "Попробуем снова", createHelloKeyboard, user, "hello")
 	default:
 		sendKeyboardMessage(bot, chatID, "Используй клавиатуру", createEducationKeyboard, user, "")
@@ -181,15 +186,15 @@ func handleEducationState(bot *tgbotapi.BotAPI, chatID int64, text string, user 
 
 // Обработка состояния выбора курса
 func handleCourseState(bot *tgbotapi.BotAPI, chatID int64, text string, user *database.User) {
-	user.Course = text
 	switch text {
-	case "⬅️Назад":
+	case BackButton:
 		sendKeyboardMessage(bot, chatID, "Попробуем еще раз", createHelloKeyboard, user, "hello")
-	case "🤓 1 курс", "😎 2 курс", "🧐 3 курс", "🎓 4 курс", "🫠 5 курс":
+	case FirstCourse, SecondCourse, ThirdCourse, FourthCourse, FifthCourse:
+		user.Course = text
 		sendKeyboardMessage(bot, chatID, "Выберите группу:", getGroupKeyboard(user.Course, user.EducationLevel), user, "select_group")
 	default:
 		keyboard := createCourseKeyboardUp
-		if user.EducationLevel == "Среднее" {
+		if user.EducationLevel == Secondary {
 			keyboard = createCourseKeyboardDown
 		}
 		sendKeyboardMessage(bot, chatID, "Нажми кнопочку на клавиатуре", keyboard, user, "")
@@ -198,15 +203,18 @@ func handleCourseState(bot *tgbotapi.BotAPI, chatID int64, text string, user *da
 
 // Обработка состояния выбора группы
 func handleGroupState(bot *tgbotapi.BotAPI, chatID int64, text string, user *database.User) {
-	user.Group = text
-	if text == "⬅️Назад" {
-		sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp, user, "waiting_for_course")
-		return
-	}
-
-	if user.Format == "" {
+	if text == BackButton {
+		if user.EducationLevel == Secondary {
+			sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardDown, user, "waiting_for_course")
+			return
+		} else {
+			sendKeyboardMessage(bot, chatID, "Выбери курс:", createCourseKeyboardUp, user, "waiting_for_course")
+			return
+		}
+	} else if user.Format == "" {
 		sendKeyboardMessage(bot, chatID, "Выбери формат вывода", createPrintKeyboard, user, "select_format")
-	} else {
+	} else if parser.FindGroupName(text) {
+		user.Group = text
 		schedule := parser.Tab(user.Group, user.Format, user.EducationLevel)
 		sendKeyboardMessage(bot, chatID, schedule, createBackKeyboard, user, "waiting_for_return")
 	}
@@ -214,7 +222,7 @@ func handleGroupState(bot *tgbotapi.BotAPI, chatID int64, text string, user *dat
 
 // Обработка состояния выбора формата вывода
 func handleFormatState(bot *tgbotapi.BotAPI, chatID int64, text string, user *database.User, userDAO *database.UserDAO, users map[int64]*database.User) {
-	if text == "⬅️Назад" {
+	if text == BackButton {
 		sendKeyboardMessage(bot, chatID, "Выберите группу:", getGroupKeyboard(user.Course, user.EducationLevel), user, "select_group")
 		return
 	}
@@ -278,7 +286,7 @@ func handleCorpusState(bot *tgbotapi.BotAPI, chatID int64, text string, user *da
 
 	if info, exists := corpusInfo[text]; exists {
 		handleMediaGroupInfo(bot, chatID, info.description, info.mapImg, info.corpusImg)
-	} else if text == "〽️Начало" {
+	} else if text == StartButton {
 		sendKeyboardMessage(bot, chatID, "Чем еще помочь?", createHelloKeyboard, user, "hello")
 	} else {
 		sendKeyboardMessage(bot, chatID, "Нажми цифру на клавиатуре", createCorpusNum, user, "")
@@ -294,17 +302,37 @@ func saveUser(user *database.User, userDAO *database.UserDAO, chatID int64) {
 
 // Сохранение только состояния пользователя
 func saveUserStateOnly(user *database.User, userDAO *database.UserDAO, chatID int64) {
-	// Создаем временного пользователя с только ID и State для обновления в БД
-	tempUser := &database.User{
-		ID:    chatID,
-		State: user.State,
+	// Проверяем, существует ли пользователь в БД
+	dbUser, err := userDAO.GetUser(chatID)
+	if err != nil {
+		log.Printf("Ошибка при получении пользователя %d из БД: %s", chatID, err)
+		return
 	}
-	if err := userDAO.SaveUser(tempUser); err != nil {
-		log.Printf("Ошибка сохранения состояния пользователя %d: %s", chatID, err)
+
+	if dbUser != nil {
+		// Пользователь существует, обновляем только состояние
+		dbUser.State = user.State
+		if err := userDAO.SaveUser(dbUser); err != nil {
+			log.Printf("Ошибка сохранения состояния пользователя %d: %s", chatID, err)
+		}
+	} else {
+		// Пользователь не существует, создаем нового
+		newUser := &database.User{
+			ID:    chatID,
+			State: user.State,
+			// Остальные поля оставляем пустыми (значения по умолчанию)
+			Course:         "",
+			Group:          "",
+			Format:         "",
+			UserName:       "",
+			EducationLevel: "",
+		}
+		if err := userDAO.SaveUser(newUser); err != nil {
+			log.Printf("Ошибка создания нового пользователя %d: %s", chatID, err)
+		}
 	}
 }
 
-// Существующие функции из вашего кода
 func sendKeyboardMessage(bot *tgbotapi.BotAPI, chatID int64, text string, keyboardFunc func() tgbotapi.ReplyKeyboardMarkup, user *database.User, newState string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	if keyboardFunc != nil {
@@ -323,14 +351,14 @@ func sendKeyboardMessage(bot *tgbotapi.BotAPI, chatID int64, text string, keyboa
 }
 
 var groupKeyboards = map[string]map[string]func() tgbotapi.ReplyKeyboardMarkup{
-	"Высшее": {
+	Higher: {
 		"🤓 1 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(1) },
 		"😎 2 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(2) },
 		"🧐 3 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(3) },
 		"🎓 4 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(4) },
 		"🫠 5 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(5) },
 	},
-	"Среднее": {
+	Secondary: {
 		"🤓 1 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(7) },
 		"😎 2 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(8) },
 		"🧐 3 курс": func() tgbotapi.ReplyKeyboardMarkup { return createGroupKeyboardCourseById(9) },

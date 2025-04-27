@@ -17,8 +17,8 @@ type Group struct {
 
 // Константы
 const (
-	HigherEd    = "Высшее"
-	SecondaryEd = "Среднее"
+	HigherEd    = "🎓Высшее"
+	SecondaryEd = "📜Среднее"
 	WeekFormat  = "📅 Неделя"
 	DayFormat   = "🌞 День 🙋‍♂️"
 )
@@ -86,7 +86,7 @@ func initGroups() {
 		{4, "🥸21-БИ-01", "21-БИ-01", "🎓 4 курс"},
 
 		{5, "🖥️20-ПО-01", "20-ПО-01", "🫠 5 курс"},
-		{5, "🖥️20-ПО-01", "20-ПО-01", "🫠 5 курс"},
+		{5, "🖥️20-ПО-02", "20-ПО-02", "🫠 5 курс"},
 
 		{7, "🏗24-СПО-ГрД-01", "24-СПО-ГрД-01", "🤓 1 курс"},
 		{7, "🏗24-СПО-ГрД-02", "24-СПО-ГрД-02", "🤓 1 курс"},
@@ -297,6 +297,14 @@ func FindGroup(tgName string) *Group {
 	groupsInit.Do(initGroups)
 	return groupsMap[tgName]
 }
+func FindGroupName(surname string) bool {
+	for _, group := range GetGroups() {
+		if strings.EqualFold(group.TGName, surname) { // EqualFold учитывает регистр
+			return true
+		}
+	}
+	return false
+}
 
 func GenerateResponseFromTable(fieldPosStart, fieldPosEnd, groupName int, rows [][]string) []string {
 	var result []string
@@ -330,7 +338,10 @@ func Tab(TGName, format, education string) string {
 	if err != nil {
 		return fmt.Sprintf("Ошибка открытия файла: %v", err)
 	}
-	defer f.Close()
+	danger := f.Close()
+	if danger != nil {
+		return fmt.Sprintf("Ошибка закрытия файла: %v", danger)
+	}
 
 	_, _, week, _ := NowTime()
 	rows, err := f.GetRows(week)
@@ -340,7 +351,7 @@ func Tab(TGName, format, education string) string {
 
 	groupName := findGroupColumn(rows[0], group.FileName)
 	if groupName == -1 {
-		return fmt.Sprintf("Группа %s не найдена в файле", group)
+		return fmt.Sprintf("Группа %v не найдена в файле", group)
 	}
 
 	return generateSchedule(format, groupName, rows)

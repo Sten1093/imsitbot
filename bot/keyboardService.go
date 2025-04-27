@@ -14,6 +14,8 @@ const (
 	FifthCourse  = "🫠 5 курс"
 	BackButton   = "⬅️Назад"
 	StartButton  = "〽️Начало"
+	Higher       = "🎓Высшее"
+	Secondary    = "📜Среднее"
 )
 
 // KeyboardConfig определяет конфигурацию клавиатуры
@@ -119,7 +121,7 @@ func createGroupKeyboardCourseById(id int) tgbotapi.ReplyKeyboardMarkup {
 // createEducationKeyboard создает клавиатуру выбора образования
 func createEducationKeyboard() tgbotapi.ReplyKeyboardMarkup {
 	return createKeyboard(KeyboardConfig{
-		Buttons:       []string{"Высшее", "Среднее"},
+		Buttons:       []string{Higher, Secondary},
 		ButtonsPerRow: 2,
 		AddBackButton: true,
 	})
